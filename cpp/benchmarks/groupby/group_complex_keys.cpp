@@ -18,6 +18,8 @@
 
 namespace {
 
+enum class key_type { INTEGRAL, STRING, MIXED };
+
 auto generate_int_keys(cudf::size_type num_cols,
                        cudf::size_type num_rows,
                        cudf::size_type value_key_ratio,
@@ -77,6 +79,28 @@ auto generate_mixed_types_keys(cudf::size_type num_cols,
                              data_profile{builder});
 }
 
+auto generate_string_keys(cudf::size_type num_cols,
+                          cudf::size_type num_rows,
+                          cudf::size_type value_key_ratio,
+                          double null_probability)
+{
+  constexpr auto max_str_length = 50;
+
+  auto builder = data_profile_builder()
+                   .cardinality(num_rows / value_key_ratio)
+                   .distribution(
+                     cudf::type_id::STRING, distribution_id::NORMAL, 0, max_str_length);
+  if (null_probability > 0) {
+    builder.null_probability(null_probability);
+  } else {
+    builder.no_validity();
+  }
+
+  return create_random_table(cycle_dtypes({cudf::type_id::STRING}, num_cols),
+                             row_count{num_rows},
+                             data_profile{builder});
+}
+
 auto generate_vals(cudf::size_type num_rows, double null_probability)
 {
   using Type   = int64_t;
@@ -90,7 +114,7 @@ auto generate_vals(cudf::size_type num_rows, double null_probability)
   return create_random_column(cudf::type_to_id<Type>(), row_count{num_rows}, data_profile{builder});
 }
 
-template <bool is_int_keys>
+template <key_type KeyType>
 void run_benchmark_complex_keys(nvbench::state& state)
 {
   auto const n_cols           = static_cast<cudf::size_type>(state.get_int64("num_cols"));
@@ -99,8 +123,10 @@ void run_benchmark_complex_keys(nvbench::state& state)
   auto const null_probability = state.get_float64("null_probability");
 
   auto const keys_table = [&] {
-    if constexpr (is_int_keys) {
+    if constexpr (KeyType == key_type::INTEGRAL) {
       return generate_int_keys(n_cols, n_rows, value_key_ratio, null_probability);
+    } else if constexpr (KeyType == key_type::STRING) {
+      return generate_string_keys(n_cols, n_rows, value_key_ratio, null_probability);
     } else {
       return generate_mixed_types_keys(n_cols, n_rows, value_key_ratio, null_probability);
     }
@@ -127,10 +153,17 @@ void run_benchmark_complex_keys(nvbench::state& state)
 
 }  // namespace
 
-void bench_groupby_int_keys(nvbench::state& state) { run_benchmark_complex_keys<true>(state); }
+void bench_groupby_int_keys(nvbench::state& state)
+{
+  run_benchmark_complex_keys<key_type::INTEGRAL>(state);
+}
+void bench_groupby_string_keys(nvbench::state& state)
+{
+  run_benchmark_complex_keys<key_type::STRING>(state);
+}
 void bench_groupby_mixed_types_keys(nvbench::state& state)
 {
-  run_benchmark_complex_keys<false>(state);
+  run_benchmark_complex_keys<key_type::MIXED>(state);
 }
 
 NVBENCH_BENCH(bench_groupby_int_keys)
@@ -143,6 +176,13 @@ NVBENCH_BENCH(bench_groupby_int_keys)
 NVBENCH_BENCH(bench_groupby_mixed_types_keys)
   .set_name("complex_mixed_keys")
   .add_int64_axis("num_cols", {1, 2, 3, 4, 5})  // Not enough memory for more mixed types columns
+  .add_int64_power_of_two_axis("num_rows", {12, 18, 24})
+  .add_int64_axis("value_key_ratio", {20, 200})
+  .add_float64_axis("null_probability", {0, 0.5});
+
+NVBENCH_BENCH(bench_groupby_string_keys)
+  .set_name("complex_string_keys")
+  .add_int64_axis("num_cols", {2})
   .add_int64_power_of_two_axis("num_rows", {12, 18, 24})
   .add_int64_axis("value_key_ratio", {20, 200})
   .add_float64_axis("null_probability", {0, 0.5});

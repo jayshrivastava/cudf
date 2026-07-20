@@ -11,6 +11,22 @@
 
 #include <nvbench/nvbench.cuh>
 
+namespace {
+
+auto make_gather_map(cudf::size_type num_rows, bool coalesce)
+{
+  if (coalesce) {
+    return cudf::sequence(num_rows,
+                          cudf::numeric_scalar<cudf::size_type>(num_rows - 1),
+                          cudf::numeric_scalar<cudf::size_type>(-1));
+  }
+
+  data_profile const profile = data_profile_builder().cardinality(0).no_validity().distribution(
+    cudf::type_to_id<cudf::size_type>(), distribution_id::UNIFORM, 0, num_rows - 1);
+  return create_random_column(
+    cudf::type_to_id<cudf::size_type>(), row_count{num_rows}, profile);
+}
+
 static void bench_gather(nvbench::state& state)
 {
   auto const num_rows = static_cast<cudf::size_type>(state.get_int64("num_rows"));
@@ -23,17 +39,7 @@ static void bench_gather(nvbench::state& state)
     return;
   }
 
-  auto gather_map = [&] {
-    if (coalesce) {
-      return cudf::sequence(num_rows,
-                            cudf::numeric_scalar<cudf::size_type>(num_rows - 1),
-                            cudf::numeric_scalar<cudf::size_type>(-1));
-    }
-
-    data_profile const profile = data_profile_builder().cardinality(0).no_validity().distribution(
-      cudf::type_to_id<cudf::size_type>(), distribution_id::UNIFORM, 0, num_rows - 1);
-    return create_random_column(cudf::type_to_id<cudf::size_type>(), row_count{num_rows}, profile);
-  }();
+  auto gather_map = make_gather_map(num_rows, coalesce);
 
   // Every element is valid
   auto source_table = create_sequence_table(cycle_dtypes({cudf::type_to_id<int64_t>()}, num_cols),
@@ -53,8 +59,51 @@ static void bench_gather(nvbench::state& state)
     mem_stats_logger.peak_memory_usage(), "peak_memory_usage", "peak_memory_usage");
 }
 
+static void bench_gather_strings(nvbench::state& state)
+{
+  auto const num_rows         = static_cast<cudf::size_type>(state.get_int64("num_rows"));
+  auto const string_width     = static_cast<cudf::size_type>(state.get_int64("string_width"));
+  auto const null_probability = state.get_float64("null_probability");
+  auto const coalesce         = static_cast<bool>(state.get_int64("coalesce"));
+
+  auto builder = data_profile_builder().cardinality(0).distribution(
+    cudf::type_id::STRING, distribution_id::NORMAL, string_width, string_width);
+  if (null_probability > 0) {
+    builder.null_probability(null_probability);
+  } else {
+    builder.no_validity();
+  }
+
+  auto source = create_random_column(
+    cudf::type_id::STRING, row_count{num_rows}, data_profile{builder});
+  auto gather_map = make_gather_map(num_rows, coalesce);
+
+  auto const stream = cudf::get_default_stream();
+  state.set_cuda_stream(nvbench::make_cuda_stream_view(stream.value()));
+  state.add_global_memory_reads<int8_t>(source->alloc_size());
+  state.add_global_memory_writes<int8_t>(source->alloc_size());
+
+  auto const mem_stats_logger = cudf::memory_stats_logger();
+
+  state.exec(nvbench::exec_tag::sync, [&](nvbench::launch&) {
+    cudf::gather(cudf::table_view{{source->view()}}, gather_map->view());
+  });
+
+  state.add_buffer_size(
+    mem_stats_logger.peak_memory_usage(), "peak_memory_usage", "peak_memory_usage");
+}
+
+}  // namespace
+
 NVBENCH_BENCH(bench_gather)
   .set_name("gather")
   .add_int64_axis("num_rows", {4096, 32768, 262144, 2097152, 16777216})
   .add_int64_axis("num_cols", {1, 8, 100, 1000})
+  .add_int64_axis("coalesce", {true, false});
+
+NVBENCH_BENCH(bench_gather_strings)
+  .set_name("gather_strings")
+  .add_int64_axis("num_rows", {4096, 262144, 524288, 2097152})
+  .add_int64_axis("string_width", {8, 64})
+  .add_float64_axis("null_probability", {0, 0.1})
   .add_int64_axis("coalesce", {true, false});
