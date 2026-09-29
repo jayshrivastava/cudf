@@ -259,11 +259,25 @@ class fixed_point_scalar_device_view : public detail::scalar_device_view_base {
   }
 
   /**
-   * @brief Stores the value in scalar
+   * @brief Stores the underlying integer representation without rescaling.
    *
-   * @param value The value to store in scalar
+   * The scalar's scale and validity are unchanged.
+   *
+   * @param value The already-scaled integer representation to store
    */
-  __device__ void set_value(rep_type value) { *_data = value; }
+  __device__ void set_rep(rep_type value) { *_data = value; }
+
+  /**
+   * @brief Stores the underlying integer representation without rescaling.
+   *
+   * @deprecated Use `set_rep()` instead.
+   *
+   * @param value The already-scaled integer representation to store
+   */
+  [[deprecated("Use set_rep() instead.")]] __device__ void set_value(rep_type value)
+  {
+    set_rep(value);
+  }
 
   /**
    * @brief Get the value of the scalar, as a `rep_type`.
