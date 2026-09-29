@@ -20,6 +20,7 @@
 
 #include <thrust/sequence.h>
 
+#include <cstdint>
 #include <random>
 
 template <typename T>
@@ -100,7 +101,7 @@ template <typename ScalarDeviceViewType>
 CUDF_KERNEL void test_set_fixed_point_rep(ScalarDeviceViewType s,
                                           typename ScalarDeviceViewType::rep_type value)
 {
-  s.set_value(value);
+  s.set_rep(value);
 }
 
 TYPED_TEST(FixedPointScalarDeviceViewTest, SetRepresentation)
@@ -109,15 +110,22 @@ TYPED_TEST(FixedPointScalarDeviceViewTest, SetRepresentation)
 
   auto constexpr initial_value = rep_type{0};
   auto constexpr value         = rep_type{12'345};
-  auto constexpr scale         = numeric::scale_type{-2};
-  cudf::fixed_point_scalar<TypeParam> s{initial_value, scale};
+  for (auto const scale : {numeric::scale_type{-2}, numeric::scale_type{2}}) {
+    for (auto const is_valid : {false, true}) {
+      SCOPED_TRACE(static_cast<int32_t>(scale));
+      SCOPED_TRACE(is_valid);
+      cudf::fixed_point_scalar<TypeParam> s{initial_value, scale, is_valid};
 
-  auto scalar_device_view = cudf::get_scalar_device_view(s);
-  test_set_fixed_point_rep<<<1, 1, 0, cudf::get_default_stream().get()>>>(scalar_device_view,
-                                                                          value);
-  CUDF_CHECK_CUDA(0);
+      auto scalar_device_view = cudf::get_scalar_device_view(s);
+      test_set_fixed_point_rep<<<1, 1, 0, cudf::get_default_stream().get()>>>(scalar_device_view,
+                                                                              value);
+      CUDF_CHECK_CUDA(0);
 
-  EXPECT_EQ(s.value(), value);
+      EXPECT_EQ(s.value(), value);
+      EXPECT_EQ(s.type().scale(), static_cast<int32_t>(scale));
+      EXPECT_EQ(s.is_valid(), is_valid);
+    }
+  }
 }
 
 TYPED_TEST(FixedPointScalarDeviceViewTest, SetValue)
